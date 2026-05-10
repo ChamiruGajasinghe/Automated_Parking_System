@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@theme {
+  /* This is where you define custom colors in v4 */
+  --color-background: #0a0f1c;
+  --color-panel: #111827;
+  --color-accent-gold: #d4af37;
+  --color-accent-crimson: #991b1b;
+  --color-text-main: #e5e7eb;
+}
+
+/* Apply the styles to the body */
+body {
+  background-color: var(--color-background);
+  color: var(--color-text-main);
+  margin: 0;
+  padding: 0;
+  font-family: sans-serif;
+}

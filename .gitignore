@@ -1,0 +1,6 @@
+node_modules/
+.pio/
+.vscode/
+__pycache__/
+*.pt
+.env*
