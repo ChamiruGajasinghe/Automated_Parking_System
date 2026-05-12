@@ -13,6 +13,9 @@ function App() {
   const [isConnected, setIsConnected] = useState(socket.connected);
   const [manualSlotId, setManualSlotId] = useState("A1");
   const [mode, setMode] = useState("AUTO");
+  const [slotsAdmin, setSlotsAdmin] = useState([]);
+  const [customersAdmin, setCustomersAdmin] = useState([]);
+  const [newCustomer, setNewCustomer] = useState({ full_name: '', phone: '', vehicle_number: '' });
 
   // Phone IP Webcam URL for the Gate Cam
   // -> CHANGE THE IP ADDRESS TO MATCH YOUR PHONE!
@@ -67,6 +70,63 @@ function App() {
     }
   };
 
+  // --- Admin API Functions ---
+  const API_BASE = 'http://localhost:3001';
+
+  const fetchSlotsApi = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/slots`);
+      const json = await res.json();
+      setSlotsAdmin(json.slots || []);
+    } catch (err) {
+      console.error('Failed to load slots', err);
+      alert('Failed to load slots from backend');
+    }
+  };
+
+  const toggleSlotOccupancy = async (slot) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/slots/${encodeURIComponent(slot.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ occupied: !slot.occupied })
+      });
+      const json = await res.json();
+      await fetchSlotsApi();
+    } catch (err) {
+      console.error('Toggle failed', err);
+      alert('Failed to update slot');
+    }
+  };
+
+  const fetchCustomersApi = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/customers`);
+      const json = await res.json();
+      setCustomersAdmin(json.customers || []);
+    } catch (err) {
+      console.error('Failed to load customers', err);
+      alert('Failed to load customers');
+    }
+  };
+
+  const createCustomerApi = async () => {
+    try {
+      if (!newCustomer.full_name.trim()) return alert('Name required');
+      const res = await fetch(`${API_BASE}/api/customers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newCustomer)
+      });
+      if (!res.ok) throw new Error('Create failed');
+      setNewCustomer({ full_name: '', phone: '', vehicle_number: '' });
+      await fetchCustomersApi();
+    } catch (err) {
+      console.error('Create customer failed', err);
+      alert('Failed to create customer');
+    }
+  };
+
   const toggleSystemMode = () => {
     const nextMode = mode === "AUTO" ? "MANUAL" : "AUTO";
     socket.emit('toggle_mode', nextMode);
@@ -113,7 +173,7 @@ function App() {
   }, []);
 
   return (
-    <div className="h-screen w-full flex flex-col overflow-hidden bg-[#0a0a0c] text-slate-200 font-sans">
+    <div className="h-screen w-full flex flex-col overflow-auto bg-[#0a0a0c] text-slate-200 font-sans">
       
       {/* --- SAFETY OVERLAY --- */}
       {data?.lift?.status === "HALTED_HUMAN" && (
@@ -179,7 +239,7 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 grid grid-cols-[1.2fr_450px_320px] gap-6 p-6 overflow-hidden">
+      <main className="flex-1 grid grid-cols-[1.2fr_450px_320px] gap-6 p-6 overflow-auto">
         
         {/* COLUMN 1: EXPANDED MECHANICAL CORE */}
         <section className="bg-[#111114] rounded-xl border border-white/5 p-6 flex flex-col shadow-2xl">
@@ -315,6 +375,56 @@ function App() {
 
         {/* COLUMN 3: OPERATIONAL MONITORING */}
         <section className="bg-[#111114] rounded-xl border border-white/5 p-4 flex flex-col gap-6">
+          {/* ADMIN: Manage Slots & Customers */}
+          <div className="bg-black/40 rounded-xl p-4 border border-white/10 shadow-lg">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Admin — Slots & Customers</h3>
+              <div className="flex gap-2">
+                <button onClick={fetchSlotsApi} className="text-xs px-3 py-1 bg-[#d4af37]/10 hover:bg-[#d4af37]/20 rounded">Load Slots</button>
+                <button onClick={fetchCustomersApi} className="text-xs px-3 py-1 bg-[#60a5fa]/10 hover:bg-[#60a5fa]/20 rounded">Load Customers</button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <h4 className="text-xs text-white/30 mb-2">Slots</h4>
+                <div className="max-h-48 overflow-auto space-y-2">
+                  {slotsAdmin.map(s => (
+                    <div key={s.id} className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
+                      <div>
+                        <div className="text-sm font-mono text-white/30">{s.id} — LVL 0{s.floor}</div>
+                        <div className={`text-[11px] font-bold ${s.occupied ? 'text-red-400' : 'text-green-400'}`}>{s.occupied ? 'FULL' : 'OPEN'}</div>
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <button onClick={() => toggleSlotOccupancy(s)} className="text-xs px-2 py-1 bg-white/5 rounded">Toggle</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-xs text-white/30 mb-2">Customers</h4>
+                <div className="max-h-28 overflow-auto mb-2 space-y-2">
+                  {customersAdmin.map(c => (
+                    <div key={c.id} className="flex items-center justify-between bg-black/20 p-2 rounded border border-white/5">
+                      <div className="text-sm font-mono text-white/30">{c.full_name}</div>
+                      <div className="text-[11px] text-white/40">{c.vehicle_number || '-'}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-2">
+                  <input value={newCustomer.full_name} onChange={e => setNewCustomer({...newCustomer, full_name: e.target.value})} placeholder="Full name" className="w-full p-2 rounded bg-black/10 text-sm" />
+                  <input value={newCustomer.phone} onChange={e => setNewCustomer({...newCustomer, phone: e.target.value})} placeholder="Phone" className="w-full p-2 rounded bg-black/10 text-sm" />
+                  <input value={newCustomer.vehicle_number} onChange={e => setNewCustomer({...newCustomer, vehicle_number: e.target.value})} placeholder="Vehicle #" className="w-full p-2 rounded bg-black/10 text-sm" />
+                  <div className="flex justify-end">
+                    <button onClick={createCustomerApi} className="text-xs px-3 py-1 bg-green-600/10 hover:bg-green-600/20 rounded">Create</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
           <div className="bg-black/40 rounded-xl p-5 border border-white/10 shadow-lg">
             <h3 className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-4">Latest Authorization</h3>
             <div className="flex gap-4 items-center">
