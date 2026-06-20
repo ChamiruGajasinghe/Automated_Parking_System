@@ -83,3 +83,9 @@ To upload the C++ code to your physical microcontrollers:
 3. Once opened, the **PlatformIO** extension will automatically detect the `platformio.ini` file and download the required C++ board libraries.
 4. Plug your microcontroller into your computer via USB.
 5. Click the **Upload** button (the right-pointing arrow `→`) on the bottom PlatformIO toolbar to compile and flash the code.
+ 
+
+## 6. To run the mqtt Connection
+PS C:\Users\chami\OneDrive\Desktop\SEM 4\Sensor Project\Automated_Parking_System> cd .\Sensor_Project_Dashboard\
+PS C:\Users\chami\OneDrive\Desktop\SEM 4\Sensor Project\Automated_Parking_System\Sensor_Project_Dashboard> cd .\backend\
+PS C:\Users\chami\OneDrive\Desktop\SEM 4\Sensor Project\Automated_Parking_System\Sensor_Project_Dashboard\backend> & "C:\Program Files\mosquitto\mosquitto.exe" -c mqtt.conf -v

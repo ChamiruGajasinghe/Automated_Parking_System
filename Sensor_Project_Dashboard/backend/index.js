@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const mqtt = require('mqtt'); // NEW: Require MQTT
+const mqtt = require('mqtt');
 
 const app = express();
 app.use(cors());
@@ -10,23 +10,42 @@ app.use(cors());
 const server = http.createServer(app);
 
 const io = new Server(server, {
-    cors: {
-        origin: "*"
-    },
+    cors: { origin: "*" },
     transports: ['websocket'],
     maxHttpBufferSize: 1e8
 });
 
 // -----------------------------
-// MQTT CONNECTION (THE BRIDGE TO HARDWARE)
-// -----------------------------
-// Use the EXACT SAME IP as the ESP32 to ensure they talk to the exact same broker interface!
-const mqttClient = mqtt.connect('mqtt://192.168.8.153:1883');
+// MQTT CONNECTION & IDENTITY LEDGER
+const mqttClient = mqtt.connect('mqtt://127.0.0.1:1883');
 
 mqttClient.on('connect', () => {
     console.log('🔌 Backend Connected to MQTT Broker');
-    mqttClient.subscribe('hardware/sensors'); // Listen to ESP32
+    mqttClient.subscribe('hardware/sensors'); 
 });
+
+// NEW: Stop Node from hiding connection errors!
+mqttClient.on('error', (err) => {
+    console.error('🚨 MQTT Connection Error:', err);
+});
+
+// HARDCODED LEDGER: Maps physical slots to master RFID card numbers
+const slotOwnersLedger = {
+    "A1": "04-B0-E1-92",  // <-- Put your real Card 1 UID here
+    "A2": "F8-2B-40-11",  // <-- Put your real Card 2 UID here
+    "A3": "1A-7C-99-04",
+    "A4": "5B-21-E4-88",
+    "B1": "99-AA-22-11",
+    "B2": "7C-4A-10-90",
+    "B3": "33-44-55-66",
+    "B4": "11-99-88-77"
+};
+
+let activeDetectedCard = {
+    uid: "AWAITING_CAR...",
+    status: "IDLE"
+};
+
 
 // -----------------------------
 // SYSTEM STATE
@@ -40,9 +59,7 @@ let liftState = {
 let targetFloor = 0;
 let targetSlot = null;
 let isHumanCurrentlyPresent = false;
-
-// Sequence Tracker for Manual Commands
-let activeSequenceData = null; // Stores { slotId, action, step }
+let activeSequenceData = null; 
 
 let parkingSlots = [
     { id: "A1", floor: 1, occupied: false },
@@ -55,28 +72,37 @@ let parkingSlots = [
     { id: "B4", floor: 2, occupied: false }
 ];
 
-let systemMode = "AUTO"; // Default mode
+let systemMode = "AUTO"; 
 
-setTimeout(() => {
-    liftState.status = "IDLE_READY"; 
-}, 2000);
+setTimeout(() => { liftState.status = "IDLE_READY"; }, 2000);
 
 // -----------------------------
-// LISTEN TO REAL HARDWARE TELEMETRY
+// MQTT TELEMETRY & OPTICAL ILLUSION INTERCEPTOR
 // -----------------------------
 mqttClient.on('message', (topic, message) => {
     if (topic === 'hardware/sensors') {
         try {
             const hwData = JSON.parse(message.toString());
-            
-            // ADD THIS LINE TO SEE THE DATA:
-            console.log("Received from Nano:", hwData);
+            console.log("Received telemetry:", hwData);
 
-            // 1. Update physical floor and exact raw position from Nano
+            // --- 1. THE OPTICAL ILLUSION: Match ID based on reported slot ---
+            if (hwData.current_slot && hwData.current_slot !== "TRANSIT") {
+                const matchedUID = slotOwnersLedger[hwData.current_slot];
+                if (matchedUID) {
+                    activeDetectedCard.uid = matchedUID;
+                    activeDetectedCard.status = "authorized";
+                }
+            } 
+            // When lift returns to Ground Zero and stops, reset the card screen
+            else if (hwData.actual_floor === 0 && hwData.motor_status === "idle") {
+                activeDetectedCard.uid = "AWAITING_CAR...";
+                activeDetectedCard.status = "IDLE";
+            }
+
+            // --- 2. UPDATE PHYSICAL POSITION ---
             liftState.currentFloor = hwData.actual_floor;
             liftState.raw_y = hwData.raw_y;
 
-            // 2. Map Nano's motor status to your UI's status, unless a human halted it
             if (liftState.status !== "HALTED_HUMAN") {
                 if (hwData.motor_status === "moving") {
                     liftState.status = "MOVING";
@@ -88,29 +114,25 @@ mqttClient.on('message', (topic, message) => {
                         liftState.status = "READY";
                     }
 
-                    // --- SEQUENCE LOGIC: We arrived somewhere and are IDLE ! ---
+                    // --- 3. AUTONOMOUS SEQUENCE COMPLETION ---
                     if (activeSequenceData && activeSequenceData.step === "MOVING_TO_SLOT") {
-                        console.log(`🤖 Arrived at slot ${activeSequenceData.slotId}. Processing servo/action...`);
+                        console.log(`🤖 Arrived at slot ${activeSequenceData.slotId}. Simulating placement...`);
                         activeSequenceData.step = "PROCESSING_AT_SLOT";
                         
-                        // Fake wait for 2 seconds (simulating grabbing/dropping the car)
                         setTimeout(() => {
-                            // 1. Update the slot occupancy!
                             const slot = parkingSlots.find(s => s.id === activeSequenceData.slotId);
                             if (slot) {
                                 slot.occupied = (activeSequenceData.action === "park");
                                 console.log(`Slot ${slot.id} is now ${slot.occupied ? "FULL" : "EMPTY"}`);
                             }
-
-                            // 2. Tell the robot to go back home!
                             activeSequenceData.step = "RETURNING_HOME";
                             mqttClient.publish('hardware/commands', JSON.stringify({ action: "home" }));
-                            console.log("🤖 Sending robot back to HOME position...");
+                            console.log("🤖 Dispatching gantry back to Ground Zero...");
                         }, 2000);
                     }
                     else if (activeSequenceData && activeSequenceData.step === "RETURNING_HOME" && liftState.currentFloor === 0) {
-                        console.log(`✅ Sequence fully completed. Robot is home.`);
-                        activeSequenceData = null; // Clear the sequence!
+                        console.log(`✅ Autonomous sequence fully verified.`);
+                        activeSequenceData = null; 
                     }
                 }
                 else if (hwData.motor_status === "halted") {
@@ -124,7 +146,7 @@ mqttClient.on('message', (topic, message) => {
 });
 
 // -----------------------------
-// MAIN BROADCAST LOOP (Hardware-Only)
+// REAL-TIME DASHCAST LOOP
 // -----------------------------
 setInterval(() => {
     io.emit('dashboard_update', {
@@ -134,10 +156,8 @@ setInterval(() => {
             status: liftState.status
         },
         slots: parkingSlots,
-        recentRFID: {
-            uid: `88-AF-${Math.floor(Math.random() * 90 + 10)}-01`,
-            status: liftState.currentFloor === 0 ? "authorized" : "secured"
-        }
+        
+        recentRFID: activeDetectedCard // Directly pushes the optical illusion
     });
 }, 100);
 
@@ -145,20 +165,16 @@ setInterval(() => {
 // SOCKET CONNECTIONS
 // -----------------------------
 io.on('connection', (socket) => {
-    console.log(`💻 Dashboard Connected: ${socket.id}`);
-
-    // Send current mode to newly connected dashboard
+    console.log(`💻 Dashboard UI Connected: ${socket.id}`);
     socket.emit('mode_update', systemMode);
 
-    // Toggle Mode Listener
     socket.on('toggle_mode', (newMode) => {
         systemMode = newMode;
-        console.log(`🔄 System Mode changed to: ${systemMode}`);
-        io.emit('mode_update', systemMode); // Broadcast to all clients
+        console.log(`🔄 System Mode switched to: ${systemMode}`);
+        io.emit('mode_update', systemMode); 
     });
 
     socket.on('manual_command', (cmd) => {
-        // ONLY allow dispatch if in MANUAL mode
         if (systemMode === "MANUAL") {
             const slot = parkingSlots.find(s => s.id === cmd.slotId);
             if (slot) {
@@ -166,10 +182,7 @@ io.on('connection', (socket) => {
                 targetFloor = slot.floor;
                 targetSlot.action = slot.occupied ? "retrieve" : "park";
                 
-                // IMPORTANT: Let backend keep state to tell frontend we are READY
                 liftState.status = "READY";
-
-                // Initialize the Sequence Tracker for Auto-Homing
                 activeSequenceData = {
                     slotId: slot.id,
                     action: targetSlot.action,
@@ -182,54 +195,38 @@ io.on('connection', (socket) => {
                     slot_id: slot.id
                 };
                 
-                // FORCE RETAIN & QoS to ensure ESP32 gets it even if loop() is busy
                 mqttClient.publish('hardware/commands', JSON.stringify(commandPayload), { qos: 1, retain: false });
-                console.log(`🕹️ Web Dispatch sent for ${slot.id} over MQTT`);
+                console.log(`🕹️ Web Dispatch issued for ${slot.id}`);
             }
         } else {
             console.log("❌ Blocked: Switch to MANUAL mode to dispatch from web.");
         }
     });
 
-    // YOLO STREAM BRIDGE
+    // YOLO AI RELAY
     socket.on('yolo_feed', (yoloData) => {
         isHumanCurrentlyPresent = yoloData.detections && yoloData.detections.some(d => d.className === 'person');
-        
         if (isHumanCurrentlyPresent) {
-            if (liftState.status !== "PARKING_IDLE" && liftState.status !== "IDLE" && liftState.status !== "HALTED_HUMAN") {
+            if (!["PARKING_IDLE", "IDLE", "HALTED_HUMAN"].includes(liftState.status)) {
                 liftState.status = "HALTED_HUMAN";
-                console.log(`🚨 EMERGENCY HALT! Human detected. Stopping motors.`);
-                
-                // NEW: Tell the Nano to hit the brakes!
+                console.log(`🚨 AI SAFETY OVERRIDE! Human detected. Brakes engaged.`);
                 mqttClient.publish('hardware/commands', JSON.stringify({ action: "EMERGENCY_STOP" }));
             }
         }
-
         socket.broadcast.emit('yolo_update', yoloData);
     });
 
-    // MANUAL CLEAR HUMAN COMMAND
     socket.on('clear_human_halt', () => {
         if (liftState.status === "HALTED_HUMAN") {
             if (!isHumanCurrentlyPresent) {
                 liftState.status = "READY";
-                console.log(`✅ Human clear confirmed! Awaiting next command.`);
-            } else {
-                console.log(`❌ Cannot clear halt! Human is still visible on camera.`);
+                console.log(`✅ Safety clearance verified. System resumed.`);
             }
         }
     });
 
-    socket.on('disconnect', () => {
-        console.log(`❌ Device Disconnected`);
-    });
+    socket.on('disconnect', () => { console.log(`❌ UI Disconnected`); });
 });
 
-// -----------------------------
-// SERVER START
-// -----------------------------
 const PORT = 3001;
-
-server.listen(PORT, () => {
-    console.log(`🚀 CAPS Backend Running on Port ${PORT}`);
-});
+server.listen(PORT, () => { console.log(`🚀 CAPS Master Backend active on Port ${PORT}`); });
