@@ -24,7 +24,6 @@ mqttClient.on('connect', () => {
     mqttClient.subscribe('hardware/sensors'); 
 });
 
-// NEW: Stop Node from hiding connection errors!
 mqttClient.on('error', (err) => {
     console.error('🚨 MQTT Connection Error:', err);
 });
@@ -58,7 +57,6 @@ let liftState = {
 
 let targetFloor = 0;
 let targetSlot = null;
-let isHumanCurrentlyPresent = false;
 let activeSequenceData = null; 
 
 let parkingSlots = [
@@ -103,42 +101,41 @@ mqttClient.on('message', (topic, message) => {
             liftState.currentFloor = hwData.actual_floor;
             liftState.raw_y = hwData.raw_y;
 
-            if (liftState.status !== "HALTED_HUMAN") {
-                if (hwData.motor_status === "moving") {
-                    liftState.status = "MOVING";
+            if (hwData.motor_status === "moving") {
+                liftState.status = "MOVING";
+            }
+            else if (hwData.motor_status === "idle") {
+                if (liftState.currentFloor === 0) {
+                    liftState.status = "PARKING_IDLE";
+                } else {
+                    liftState.status = "READY";
                 }
-                else if (hwData.motor_status === "idle") {
-                    if (liftState.currentFloor === 0) {
-                        liftState.status = "PARKING_IDLE";
-                    } else {
-                        liftState.status = "READY";
-                    }
 
-                    // --- 3. AUTONOMOUS SEQUENCE COMPLETION ---
-                    if (activeSequenceData && activeSequenceData.step === "MOVING_TO_SLOT") {
-                        console.log(`🤖 Arrived at slot ${activeSequenceData.slotId}. Simulating placement...`);
-                        activeSequenceData.step = "PROCESSING_AT_SLOT";
-                        
-                        setTimeout(() => {
-                            const slot = parkingSlots.find(s => s.id === activeSequenceData.slotId);
-                            if (slot) {
-                                slot.occupied = (activeSequenceData.action === "park");
-                                console.log(`Slot ${slot.id} is now ${slot.occupied ? "FULL" : "EMPTY"}`);
-                            }
-                            activeSequenceData.step = "RETURNING_HOME";
-                            mqttClient.publish('hardware/commands', JSON.stringify({ action: "home" }));
-                            console.log("🤖 Dispatching gantry back to Ground Zero...");
-                        }, 2000);
-                    }
-                    else if (activeSequenceData && activeSequenceData.step === "RETURNING_HOME" && liftState.currentFloor === 0) {
-                        console.log(`✅ Autonomous sequence fully verified.`);
-                        activeSequenceData = null; 
-                    }
+                // --- 3. AUTONOMOUS SEQUENCE COMPLETION ---
+                if (activeSequenceData && activeSequenceData.step === "MOVING_TO_SLOT") {
+                    console.log(`🤖 Arrived at slot ${activeSequenceData.slotId}. Simulating placement...`);
+                    activeSequenceData.step = "PROCESSING_AT_SLOT";
+                    
+                    setTimeout(() => {
+                        const slot = parkingSlots.find(s => s.id === activeSequenceData.slotId);
+                        if (slot) {
+                            slot.occupied = (activeSequenceData.action === "park");
+                            console.log(`Slot ${slot.id} is now ${slot.occupied ? "FULL" : "EMPTY"}`);
+                        }
+                        activeSequenceData.step = "RETURNING_HOME";
+                        mqttClient.publish('hardware/commands', JSON.stringify({ action: "home" }));
+                        console.log("🤖 Dispatching gantry back to Ground Zero...");
+                    }, 2000);
                 }
-                else if (hwData.motor_status === "halted") {
-                    liftState.status = "HALTED_HUMAN";
+                else if (activeSequenceData && activeSequenceData.step === "RETURNING_HOME" && liftState.currentFloor === 0) {
+                    console.log(`✅ Autonomous sequence fully verified.`);
+                    activeSequenceData = null; 
                 }
             }
+            else if (hwData.motor_status === "halted") {
+                liftState.status = "HALTED";
+            }
+            
         } catch (err) {
             console.error("MQTT Parse Error:", message.toString());
         }
@@ -203,26 +200,9 @@ io.on('connection', (socket) => {
         }
     });
 
-    // YOLO AI RELAY
+    // YOLO AI RELAY (Now purely for visual feed without logic interrupts)
     socket.on('yolo_feed', (yoloData) => {
-        isHumanCurrentlyPresent = yoloData.detections && yoloData.detections.some(d => d.className === 'person');
-        if (isHumanCurrentlyPresent) {
-            if (!["PARKING_IDLE", "IDLE", "HALTED_HUMAN"].includes(liftState.status)) {
-                liftState.status = "HALTED_HUMAN";
-                console.log(`🚨 AI SAFETY OVERRIDE! Human detected. Brakes engaged.`);
-                mqttClient.publish('hardware/commands', JSON.stringify({ action: "EMERGENCY_STOP" }));
-            }
-        }
         socket.broadcast.emit('yolo_update', yoloData);
-    });
-
-    socket.on('clear_human_halt', () => {
-        if (liftState.status === "HALTED_HUMAN") {
-            if (!isHumanCurrentlyPresent) {
-                liftState.status = "READY";
-                console.log(`✅ Safety clearance verified. System resumed.`);
-            }
-        }
     });
 
     socket.on('disconnect', () => { console.log(`❌ UI Disconnected`); });
