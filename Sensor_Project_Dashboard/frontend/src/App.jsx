@@ -15,49 +15,19 @@ function App() {
   const [mode, setMode] = useState("AUTO");
 
   // Phone IP Webcam URL for the Raw Gate Feed
-  // -> Remember to check your phone's screen and update this IP if it changes!
-  const GATE_CAM_URL = "http://192.168.8.178:8080/video";
+  const GATE_CAM_URL = "http://192.168.8.146:8080/video";
 
   const dispatchManualCommand = () => {
-    if (yoloDetections.some(d => d.className === 'person')) {
-      playAlarm();
-      return; 
-    }
     if (isConnected) {
       socket.emit('manual_command', { slotId: manualSlotId });
     }
   };
 
-  const playAlarm = () => {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
-    
-    oscillator.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    
-    oscillator.type = 'square';
-    oscillator.frequency.setValueAtTime(600, audioCtx.currentTime); 
-    oscillator.frequency.setValueAtTime(900, audioCtx.currentTime + 0.15); 
-    gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime); 
-    
-    oscillator.start();
-    oscillator.stop(audioCtx.currentTime + 0.3); 
-  };
-
-  useEffect(() => {
-    if (data?.lift?.status === "HALTED_HUMAN") {
-      const interval = setInterval(playAlarm, 500); 
-      return () => clearInterval(interval);
+  // --- NEW: Emergency Home Dispatcher ---
+  const dispatchEmergencyHome = () => {
+    if (isConnected) {
+      socket.emit('emergency_home');
     }
-  }, [data?.lift?.status]);
-
-  const clearHumanHalt = () => {
-    if (yoloDetections.some(d => d.className === 'person')) {
-      alert("Clearance rejected: Subject still detected in operating envelope.");
-      return;
-    }
-    if (isConnected) socket.emit('clear_human_halt');
   };
 
   const toggleSystemMode = () => {
@@ -97,30 +67,6 @@ function App() {
   return (
     <div className="h-screen w-full flex flex-col overflow-hidden bg-[#0a0a0c] text-slate-200 font-sans">
       
-      {/* --- SAFETY OVERLAY --- */}
-      {data?.lift?.status === "HALTED_HUMAN" && (
-        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-xl p-4">
-           <div className="w-[80vw] h-[80vh] flex flex-col bg-red-950/20 border-4 border-red-600 shadow-[0_0_100px_rgba(220,38,38,0.4)] rounded-2xl overflow-hidden relative">
-              <div className="flex-1 bg-black relative flex items-center justify-center overflow-hidden">
-                 <div className="absolute top-4 left-4 z-10 bg-black/80 px-4 py-2 rounded text-xs font-mono text-red-400 border border-red-500/30 flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse"></div>
-                    LIVE SECURITY FEED VERIFICATION
-                 </div>
-                 <img src={GATE_CAM_URL} alt="Gate Feed" className="w-full h-full object-contain" onError={(e) => { e.target.style.display = 'none'; }}/>
-              </div>
-              <div className="bg-[#0a0a0c] border-t-4 border-red-600 p-6 flex flex-col md:flex-row items-center justify-between gap-6 z-20">
-                 <div>
-                    <div className="text-3xl font-black animate-pulse tracking-widest text-red-500">⚠️ EMERGENCY HALT</div>
-                    <span className="text-sm font-mono tracking-[0.2em] text-red-200 mt-2 block">HUMAN DETECTED ON LIFT - VISUAL CLEARANCE REQUIRED</span>
-                 </div>
-                 <button onClick={clearHumanHalt} className="bg-red-600 hover:bg-red-500 text-white border-2 border-red-400 text-xl font-black py-4 px-8 rounded tracking-widest transition-all hover:scale-[1.02] active:scale-95 shadow-[0_0_30px_rgba(220,38,38,0.5)]">
-                    CONFIRM CLEAR & RESUME LIFT
-                 </button>
-              </div>
-           </div>
-        </div>
-      )}
-
       {/* --- HEADER --- */}
       <header className="h-16 border-b border-white/10 flex items-center justify-between px-8 bg-[#111114] z-50">
         <h1 className="text-xl font-bold tracking-[0.2em] text-[#d4af37]">
@@ -192,6 +138,12 @@ function App() {
                          DISPATCH
                        </button>
                     </div>
+                    
+                    {/* --- NEW: EMERGENCY HOME BUTTON --- */}
+                    <button onClick={dispatchEmergencyHome} className="mt-1 w-full bg-red-900/40 hover:bg-red-600/60 text-red-400 border border-red-500/50 text-[10px] font-bold tracking-[0.2em] py-2 rounded transition-all shadow-[0_0_15px_rgba(220,38,38,0.15)] active:scale-95">
+                       🚨 EMERGENCY HOME (0,0,0)
+                    </button>
+
                     <span className="text-[8px] text-white/30 italic text-center leading-tight">
                       {mode === "AUTO" ? "Switch to MANUAL mode to dispatch commands." : (!["IDLE", "IDLE_READY", "READY", "PARKING_IDLE"].includes(data?.lift?.status) ? "Lift busy. Please wait." : "Select slot. If full, it retrieves. If empty, it parks.")}
                     </span>

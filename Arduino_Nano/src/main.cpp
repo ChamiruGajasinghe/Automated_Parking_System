@@ -61,7 +61,7 @@ int getAveragedData(int pad, int samples) {
 
 void setup() {
   // LabVIEW Communication (USB) - Make sure your Serial Monitor is set to 115200!
-  Serial.begin(115200);
+  Serial.begin(9600);
   
   // ESP32 Communication
   espSerial.begin(9600); 
