@@ -30,8 +30,8 @@ mqttClient.on('error', (err) => {
 
 // HARDCODED LEDGER: Maps physical slots to master RFID card numbers
 const slotOwnersLedger = {
-    "A1": "04-B0-E1-92",  // <-- Put your real Card 1 UID here
-    "A2": "F8-2B-40-11",  // <-- Put your real Card 2 UID here
+    "A1": "04-B0-E1-92",  
+    "A2": "F8-2B-40-11",  
     "A3": "1A-7C-99-04",
     "A4": "5B-21-E4-88",
     "B1": "99-AA-22-11",
@@ -44,7 +44,6 @@ let activeDetectedCard = {
     uid: "AWAITING_CAR...",
     status: "IDLE"
 };
-
 
 // -----------------------------
 // SYSTEM STATE
@@ -75,13 +74,12 @@ let systemMode = "AUTO";
 setTimeout(() => { liftState.status = "IDLE_READY"; }, 2000);
 
 // -----------------------------
-// MQTT TELEMETRY & OPTICAL ILLUSION INTERCEPTOR
+// MQTT TELEMETRY INTERCEPTOR
 // -----------------------------
 mqttClient.on('message', (topic, message) => {
     if (topic === 'hardware/sensors') {
         try {
             const hwData = JSON.parse(message.toString());
-            console.log("Received telemetry:", hwData);
 
             // --- 1. THE OPTICAL ILLUSION: Match ID based on reported slot ---
             if (hwData.current_slot && hwData.current_slot !== "TRANSIT") {
@@ -103,6 +101,11 @@ mqttClient.on('message', (topic, message) => {
 
             if (hwData.motor_status === "moving") {
                 liftState.status = "MOVING";
+                
+                // CULPRIT 1 FIX: Advance the sequence tracker to "MOVING" only AFTER the hardware actually starts moving!
+                if (activeSequenceData && activeSequenceData.step === "DISPATCHED") {
+                    activeSequenceData.step = "MOVING";
+                }
             }
             else if (hwData.motor_status === "idle") {
                 if (liftState.currentFloor === 0) {
@@ -111,29 +114,27 @@ mqttClient.on('message', (topic, message) => {
                     liftState.status = "READY";
                 }
 
-                // --- 3. AUTONOMOUS SEQUENCE COMPLETION ---
-                if (activeSequenceData && activeSequenceData.step === "MOVING_TO_SLOT") {
-                    console.log(`🤖 Arrived at slot ${activeSequenceData.slotId}. Simulating placement...`);
-                    activeSequenceData.step = "PROCESSING_AT_SLOT";
-                    
-                    setTimeout(() => {
-                        const slot = parkingSlots.find(s => s.id === activeSequenceData.slotId);
-                        if (slot) {
-                            slot.occupied = (activeSequenceData.action === "park");
-                            console.log(`Slot ${slot.id} is now ${slot.occupied ? "FULL" : "EMPTY"}`);
-                        }
-                        activeSequenceData.step = "RETURNING_HOME";
-                        mqttClient.publish('hardware/commands', JSON.stringify({ action: "home" }));
-                        console.log("🤖 Dispatching gantry back to Ground Zero...");
-                    }, 2000);
-                }
-                else if (activeSequenceData && activeSequenceData.step === "RETURNING_HOME" && liftState.currentFloor === 0) {
-                    console.log(`✅ Autonomous sequence fully verified.`);
+                // --- 3. SAFE SEQUENCE COMPLETION ---
+                // CULPRIT 1 FIX: Only complete the sequence if we VERIFIED the motor actually traveled and returned!
+                if (activeSequenceData && activeSequenceData.step === "MOVING" && liftState.currentFloor === 0) {
+                    console.log(`🤖 Sequence Round-Trip completed for slot ${activeSequenceData.slotId}.`);
+                    const slot = parkingSlots.find(s => s.id === activeSequenceData.slotId);
+                    if (slot) {
+                        slot.occupied = (activeSequenceData.action === "park");
+                        console.log(`Slot ${slot.id} is now ${slot.occupied ? "FULL" : "EMPTY"}`);
+                    }
+                    // Cleanly clear the sequence
                     activeSequenceData = null; 
                 }
             }
             else if (hwData.motor_status === "halted") {
                 liftState.status = "HALTED";
+                
+                // CULPRIT 2 FIX: If a hardware HALT occurs, abort any running web sequences to prevent ghost completions!
+                if (activeSequenceData) {
+                    console.log("🚨 Hardware HALT detected! Aborting active web sequence memory.");
+                    activeSequenceData = null;
+                }
             }
             
         } catch (err) {
@@ -153,8 +154,7 @@ setInterval(() => {
             status: liftState.status
         },
         slots: parkingSlots,
-        
-        recentRFID: activeDetectedCard // Directly pushes the optical illusion
+        recentRFID: activeDetectedCard 
     });
 }, 100);
 
@@ -177,13 +177,17 @@ io.on('connection', (socket) => {
             if (slot) {
                 targetSlot = slot;
                 targetFloor = slot.floor;
+                
+                // Intelligently choose Park or Retrieve based on current slot status
                 targetSlot.action = slot.occupied ? "retrieve" : "park";
                 
                 liftState.status = "READY";
+                
+                // Initialize as DISPATCHED. It will not complete until it transitions to MOVING.
                 activeSequenceData = {
                     slotId: slot.id,
                     action: targetSlot.action,
-                    step: "MOVING_TO_SLOT"
+                    step: "DISPATCHED" 
                 };
 
                 const commandPayload = {
@@ -193,14 +197,21 @@ io.on('connection', (socket) => {
                 };
                 
                 mqttClient.publish('hardware/commands', JSON.stringify(commandPayload), { qos: 1, retain: false });
-                console.log(`🕹️ Web Dispatch issued for ${slot.id}`);
+                console.log(`🕹️ Web Dispatch issued: ${targetSlot.action.toUpperCase()} at ${slot.id}`);
             }
         } else {
             console.log("❌ Blocked: Switch to MANUAL mode to dispatch from web.");
         }
     });
 
-    // YOLO AI RELAY (Now purely for visual feed without logic interrupts)
+    // --- EMERGENCY HOME COMMAND ---
+    socket.on('emergency_home', () => {
+        console.log(`🚨 Web UI Triggered EMERGENCY SAFE HOME`);
+        activeSequenceData = null; // Clear any autonomous sequence currently running
+        mqttClient.publish('hardware/commands', JSON.stringify({ action: "home" }), { qos: 1, retain: false });
+    });
+
+    // YOLO AI RELAY (Purely visual feed without logic interrupts)
     socket.on('yolo_feed', (yoloData) => {
         socket.broadcast.emit('yolo_update', yoloData);
     });

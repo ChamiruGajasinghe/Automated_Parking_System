@@ -15,13 +15,18 @@ function App() {
   const [mode, setMode] = useState("AUTO");
 
   // Phone IP Webcam URL for the Raw Gate Feed
-  // -> Remember to check your phone's screen and update this IP if it changes!
-  const GATE_CAM_URL = "http://192.168.8.178:8080/video";
+  const GATE_CAM_URL = "http://192.168.8.146:8080/video";
 
   const dispatchManualCommand = () => {
-    // Removed the AI human detection block that triggers the alarm
     if (isConnected) {
       socket.emit('manual_command', { slotId: manualSlotId });
+    }
+  };
+
+  // --- NEW: Emergency Home Dispatcher ---
+  const dispatchEmergencyHome = () => {
+    if (isConnected) {
+      socket.emit('emergency_home');
     }
   };
 
@@ -133,6 +138,12 @@ function App() {
                          DISPATCH
                        </button>
                     </div>
+                    
+                    {/* --- NEW: EMERGENCY HOME BUTTON --- */}
+                    <button onClick={dispatchEmergencyHome} className="mt-1 w-full bg-red-900/40 hover:bg-red-600/60 text-red-400 border border-red-500/50 text-[10px] font-bold tracking-[0.2em] py-2 rounded transition-all shadow-[0_0_15px_rgba(220,38,38,0.15)] active:scale-95">
+                       🚨 EMERGENCY HOME (0,0,0)
+                    </button>
+
                     <span className="text-[8px] text-white/30 italic text-center leading-tight">
                       {mode === "AUTO" ? "Switch to MANUAL mode to dispatch commands." : (!["IDLE", "IDLE_READY", "READY", "PARKING_IDLE"].includes(data?.lift?.status) ? "Lift busy. Please wait." : "Select slot. If full, it retrieves. If empty, it parks.")}
                     </span>
